@@ -1,38 +1,32 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import engine
-from routers import spots
-import models
+from app.core.config import settings
+from app.core.database import Base, engine
+import app.models  # noqa: F401 — 모든 모델 등록 후 테이블 생성
 
-# DB 테이블 생성
-models.Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="RideQuest API",
-    description="자전거 라이더를 위한 위치 기반 퀘스트 서비스",
-    version="0.1.0"
+    title="Earth Canvas API",
+    description="GPS 경로를 캔버스 삼아 그림을 그리는 라이딩 채점 서비스",
+    version="0.1.0",
 )
 
-# CORS 설정 (React 프론트엔드 연동용)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 라우터 등록
-app.include_router(spots.router)
 
-
-@app.get("/")
+@app.get("/", tags=["root"])
 def root():
-    return {"message": "RideQuest API 서버가 실행 중입니다"}
+    return {"message": "Earth Canvas API 서버가 실행 중입니다"}
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 def health_check():
-    return {"status": "healthy"}
-
+    return {"status": "healthy", "service": "earth-canvas-api"}
