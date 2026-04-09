@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import Base, engine
 import app.models  # noqa: F401 — 모든 모델 등록 후 테이블 생성
-from app.routers import stencil, rides
+from app.routers import stencil, rides, scores
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,6 +24,7 @@ app.add_middleware(
 
 app.include_router(stencil.router)
 app.include_router(rides.router)
+app.include_router(scores.router)
 
 
 @app.get("/", tags=["root"])
