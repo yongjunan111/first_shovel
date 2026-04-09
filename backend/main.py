@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, engine, SessionLocal
 import app.models  # noqa: F401 — 모든 모델 등록 후 테이블 생성
+from app.models.user import User
 from app.routers import stencil, rides, scores
 
 Base.metadata.create_all(bind=engine)
@@ -25,6 +26,19 @@ app.add_middleware(
 app.include_router(stencil.router)
 app.include_router(rides.router)
 app.include_router(scores.router)
+
+
+@app.on_event("startup")
+def seed_dev_user() -> None:
+    """Ensure a placeholder user (id=1) exists for pre-auth development.
+    Remove this once JWT auth lands on Day 4."""
+    db = SessionLocal()
+    try:
+        if not db.query(User).filter(User.id == 1).first():
+            db.add(User(email="dev@earthcanvas.local", nickname="DevUser", provider="local"))
+            db.commit()
+    finally:
+        db.close()
 
 
 @app.get("/", tags=["root"])
