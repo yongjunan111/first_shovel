@@ -56,27 +56,29 @@ def _path_length_m(pts: np.ndarray) -> float:
 
 # ── Douglas-Peucker downsampling ─────────────────────────────────────────────
 
-def _perpendicular_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
-    if np.allclose(start, end):
-        return float(np.linalg.norm(point - start))
-    line_vec = end - start
-    point_vec = point - start
-    line_len = np.linalg.norm(line_vec)
-    proj = np.dot(point_vec, line_vec) / (line_len ** 2)
-    proj = np.clip(proj, 0, 1)
-    closest = start + proj * line_vec
-    return float(np.linalg.norm(point - closest))
-
-
 def _douglas_peucker(pts: np.ndarray, epsilon: float) -> List[int]:
-    """Return indices of points to keep."""
+    """Return indices of points to keep.
+    Uses fully vectorised perpendicular-distance computation — no Python loop."""
     if len(pts) <= 2:
         return list(range(len(pts)))
-    max_dist, max_idx = 0.0, 0
-    for i in range(1, len(pts) - 1):
-        d = _perpendicular_distance(pts[i], pts[0], pts[-1])
-        if d > max_dist:
-            max_dist, max_idx = d, i
+
+    start, end = pts[0], pts[-1]
+    line_vec = end - start
+    line_len_sq = float(np.dot(line_vec, line_vec))
+
+    if line_len_sq == 0:
+        return [0, len(pts) - 1]
+
+    # Vectorised: compute perpendicular distances for all interior points at once
+    vecs = pts[1:-1] - start                                       # (n-2, 2)
+    proj = np.clip(vecs @ line_vec / line_len_sq, 0, 1)           # (n-2,)
+    closest = start + proj[:, np.newaxis] * line_vec              # (n-2, 2)
+    distances = np.linalg.norm(pts[1:-1] - closest, axis=1)      # (n-2,)
+
+    max_idx_interior = int(np.argmax(distances))
+    max_dist = float(distances[max_idx_interior])
+    max_idx = max_idx_interior + 1  # shift back to full array index
+
     if max_dist > epsilon:
         left = _douglas_peucker(pts[:max_idx + 1], epsilon)
         right = _douglas_peucker(pts[max_idx:], epsilon)
