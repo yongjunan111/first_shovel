@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.database import get_db
+from app.core.exceptions import NotFoundError, BadRequestError
 from app.models.score import Score
 from app.models.ride import Ride
 from app.models.blueprint import Blueprint
@@ -11,28 +12,25 @@ from app.services.scoring import compute_score
 
 router = APIRouter(prefix="/api/scores", tags=["scores"])
 
-# TODO: replace with real JWT auth (Day 4)
-TEMP_USER_ID = 1
-
 
 @router.post("", response_model=ScoreResponse, status_code=201)
 def create_score(body: ScoreRequest, db: Session = Depends(get_db)):
     ride = db.query(Ride).filter(Ride.id == body.ride_id).first()
     if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+        raise NotFoundError(f"Ride {body.ride_id} not found")
     if not ride.finished_at:
-        raise HTTPException(status_code=400, detail="Ride not finished yet")
-    if not ride.actual_coordinates:
-        raise HTTPException(status_code=400, detail="Ride has no coordinates")
+        raise BadRequestError("Ride not finished yet")
+    if not ride.actual_coordinates or len(ride.actual_coordinates) < 2:
+        raise BadRequestError("Ride has insufficient coordinates for scoring")
 
-    # Prevent duplicate scoring
+    # Prevent duplicate scoring — return existing
     existing = db.query(Score).filter(Score.ride_id == body.ride_id).first()
     if existing:
         return existing
 
     bp = db.query(Blueprint).filter(Blueprint.id == ride.blueprint_id).first()
     if not bp:
-        raise HTTPException(status_code=404, detail="Blueprint not found")
+        raise NotFoundError(f"Blueprint {ride.blueprint_id} not found")
 
     result = compute_score(bp.coordinates, ride.actual_coordinates)
 
@@ -50,19 +48,10 @@ def create_score(body: ScoreRequest, db: Session = Depends(get_db)):
     return score
 
 
-@router.get("/{ride_id}", response_model=ScoreResponse)
-def get_score(ride_id: int, db: Session = Depends(get_db)):
-    score = db.query(Score).filter(Score.ride_id == ride_id).first()
-    if not score:
-        raise HTTPException(status_code=404, detail="Score not found")
-    return score
-
-
 @router.get("/ranking/{blueprint_id}", response_model=List[RankingEntry])
 def get_ranking(blueprint_id: int, db: Session = Depends(get_db)):
-    bp = db.query(Blueprint).filter(Blueprint.id == blueprint_id).first()
-    if not bp:
-        raise HTTPException(status_code=404, detail="Blueprint not found")
+    if not db.query(Blueprint).filter(Blueprint.id == blueprint_id).first():
+        raise NotFoundError(f"Blueprint {blueprint_id} not found")
 
     scores = (
         db.query(Score)
@@ -71,7 +60,6 @@ def get_ranking(blueprint_id: int, db: Session = Depends(get_db)):
         .limit(100)
         .all()
     )
-
     return [
         RankingEntry(
             rank=i + 1,
@@ -82,3 +70,11 @@ def get_ranking(blueprint_id: int, db: Session = Depends(get_db)):
         )
         for i, s in enumerate(scores)
     ]
+
+
+@router.get("/{ride_id}", response_model=ScoreResponse)
+def get_score(ride_id: int, db: Session = Depends(get_db)):
+    score = db.query(Score).filter(Score.ride_id == ride_id).first()
+    if not score:
+        raise NotFoundError(f"Score for ride {ride_id} not found")
+    return score

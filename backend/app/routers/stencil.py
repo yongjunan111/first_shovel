@@ -1,24 +1,33 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.blueprint import Blueprint
 from app.schemas.stencil import StencilTransformRequest, StencilTransformResponse, Bounds, Center
 from app.services.stencil import transform_coordinates, compute_bounds, compute_center
 
 router = APIRouter(prefix="/api/stencil", tags=["stencil"])
 
+_SCALE_MIN, _SCALE_MAX = 0.1, 10.0
+
 
 def _get_blueprint_or_404(blueprint_id: int, db: Session) -> Blueprint:
     bp = db.query(Blueprint).filter(Blueprint.id == blueprint_id).first()
     if not bp:
-        raise HTTPException(status_code=404, detail="Blueprint not found")
+        raise NotFoundError(f"Blueprint {blueprint_id} not found")
     return bp
 
 
 @router.post("/transform", response_model=StencilTransformResponse)
 def transform(body: StencilTransformRequest, db: Session = Depends(get_db)):
+    if not (_SCALE_MIN <= body.scale <= _SCALE_MAX):
+        raise ValidationError(f"scale must be between {_SCALE_MIN} and {_SCALE_MAX}")
+
     bp = _get_blueprint_or_404(body.blueprint_id, db)
+
+    if not bp.coordinates or len(bp.coordinates) < 2:
+        raise ValidationError("Blueprint has insufficient coordinates for transform")
 
     transformed = transform_coordinates(
         bp.coordinates,
@@ -44,7 +53,13 @@ def preview(
     scale: float = 1.0,
     db: Session = Depends(get_db),
 ):
+    if not (_SCALE_MIN <= scale <= _SCALE_MAX):
+        raise ValidationError(f"scale must be between {_SCALE_MIN} and {_SCALE_MAX}")
+
     bp = _get_blueprint_or_404(blueprint_id, db)
+
+    if not bp.coordinates or len(bp.coordinates) < 2:
+        raise ValidationError("Blueprint has insufficient coordinates for transform")
 
     transformed = transform_coordinates(bp.coordinates, lat, lng, angle, scale)
 

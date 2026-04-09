@@ -1,18 +1,35 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import Base, engine, SessionLocal
+from app.core.exceptions import register_exception_handlers
 import app.models  # noqa: F401 — 모든 모델 등록 후 테이블 생성
 from app.models.user import User
 from app.routers import stencil, rides, scores
 
 Base.metadata.create_all(bind=engine)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Seed dev user (id=1) on startup. Remove once JWT auth lands."""
+    db = SessionLocal()
+    try:
+        if not db.query(User).filter(User.id == 1).first():
+            db.add(User(email="dev@earthcanvas.local", nickname="DevUser", provider="local"))
+            db.commit()
+    finally:
+        db.close()
+    yield
+
+
 app = FastAPI(
     title="Earth Canvas API",
     description="GPS 경로를 캔버스 삼아 그림을 그리는 라이딩 채점 서비스",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -27,18 +44,7 @@ app.include_router(stencil.router)
 app.include_router(rides.router)
 app.include_router(scores.router)
 
-
-@app.on_event("startup")
-def seed_dev_user() -> None:
-    """Ensure a placeholder user (id=1) exists for pre-auth development.
-    Remove this once JWT auth lands on Day 4."""
-    db = SessionLocal()
-    try:
-        if not db.query(User).filter(User.id == 1).first():
-            db.add(User(email="dev@earthcanvas.local", nickname="DevUser", provider="local"))
-            db.commit()
-    finally:
-        db.close()
+register_exception_handlers(app)
 
 
 @app.get("/", tags=["root"])

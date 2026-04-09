@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.database import get_db
+from app.core.exceptions import NotFoundError, BadRequestError
 from app.models.ride import Ride
 from app.models.blueprint import Blueprint
 from app.schemas.ride import RideCreate, RideFinish, RideResponse
@@ -15,9 +16,8 @@ TEMP_USER_ID = 1
 
 @router.post("", response_model=RideResponse, status_code=201)
 def start_ride(body: RideCreate, db: Session = Depends(get_db)):
-    bp = db.query(Blueprint).filter(Blueprint.id == body.blueprint_id).first()
-    if not bp:
-        raise HTTPException(status_code=404, detail="Blueprint not found")
+    if not db.query(Blueprint).filter(Blueprint.id == body.blueprint_id).first():
+        raise NotFoundError(f"Blueprint {body.blueprint_id} not found")
 
     ride = Ride(
         user_id=TEMP_USER_ID,
@@ -34,9 +34,11 @@ def start_ride(body: RideCreate, db: Session = Depends(get_db)):
 def finish_ride(ride_id: int, body: RideFinish, db: Session = Depends(get_db)):
     ride = db.query(Ride).filter(Ride.id == ride_id, Ride.user_id == TEMP_USER_ID).first()
     if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+        raise NotFoundError(f"Ride {ride_id} not found")
     if ride.finished_at:
-        raise HTTPException(status_code=400, detail="Ride already finished")
+        raise BadRequestError("Ride already finished")
+    if len(body.actual_coordinates) < 2:
+        raise BadRequestError("actual_coordinates must have at least 2 points")
 
     ride.actual_coordinates = body.actual_coordinates
     ride.finished_at = body.finished_at
@@ -56,5 +58,5 @@ def list_rides(db: Session = Depends(get_db)):
 def get_ride(ride_id: int, db: Session = Depends(get_db)):
     ride = db.query(Ride).filter(Ride.id == ride_id, Ride.user_id == TEMP_USER_ID).first()
     if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+        raise NotFoundError(f"Ride {ride_id} not found")
     return ride

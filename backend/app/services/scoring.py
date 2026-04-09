@@ -126,6 +126,10 @@ def compute_score(
     if not blueprint_coords or not actual_coords:
         return _zero_score("empty coordinates")
 
+    # Single-point paths can't form a meaningful DTW comparison
+    if len(blueprint_coords) < 2 or len(actual_coords) < 2:
+        return _zero_score("path must have at least 2 points")
+
     # 1. Downsample
     bp_ds = downsample(blueprint_coords)
     ac_ds = downsample(actual_coords)
