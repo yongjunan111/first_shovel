@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Location permission descriptions (required by App Store) -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Earth Canvas needs your location to show your position on the map and track your ride.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+    <string>Earth Canvas needs background location access to record your full ride path.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Earth Canvas needs background location access to record your full ride path.</string>
+
+    <key>CFBundleName</key>
+    <string>Earth Canvas</string>
+    <key>CFBundleDisplayName</key>
+    <string>Earth Canvas</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleVersion</key>
+    <string>$(FLUTTER_BUILD_NUMBER)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(FLUTTER_BUILD_NAME)</string>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+</dict>
+</plist>
