@@ -22,17 +22,15 @@ def create_score(body: ScoreRequest, db: Session = Depends(get_db)):
         raise BadRequestError("Ride not finished yet")
     if not ride.actual_coordinates or len(ride.actual_coordinates) < 2:
         raise BadRequestError("Ride has insufficient coordinates for scoring")
+    if not ride.target_coordinates or len(ride.target_coordinates) < 2:
+        raise BadRequestError("Ride has insufficient target coordinates for scoring")
 
     # Prevent duplicate scoring — return existing
     existing = db.query(Score).filter(Score.ride_id == body.ride_id).first()
     if existing:
         return existing
 
-    bp = db.query(Blueprint).filter(Blueprint.id == ride.blueprint_id).first()
-    if not bp:
-        raise NotFoundError(f"Blueprint {ride.blueprint_id} not found")
-
-    result = compute_score(bp.coordinates, ride.actual_coordinates)
+    result = compute_score(ride.target_coordinates, ride.actual_coordinates)
 
     score = Score(
         ride_id=ride.id,

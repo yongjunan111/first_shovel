@@ -10,6 +10,8 @@ class Ride(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     blueprint_id = Column(Integer, ForeignKey("blueprints.id"), nullable=False)
+    # target_coordinates: 서버가 start_ride 시점에 stencil 변환 결과를 저장. 채점 기준 경로.
+    target_coordinates = Column(JSON, nullable=False)
     # actual_coordinates: [[lat, lng], ...] JSON 저장
     actual_coordinates = Column(JSON)
     started_at = Column(DateTime(timezone=True), nullable=False)

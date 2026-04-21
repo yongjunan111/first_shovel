@@ -64,6 +64,21 @@ first_shovel/
 └── README.md
 ```
 
+## 📐 API 계약 메모
+
+### `POST /api/rides` — Ride 시작
+
+필수 필드: `blueprint_id`, `started_at`.
+
+스텐실 파라미터(`target_lat`, `target_lng`, `rotation_angle`, `scale`)는 모두 **optional**이다.
+
+- `target_lat` + `target_lng` 둘 다 전달하면 서버가 `transform_coordinates`로 스텐실 변환 결과를 계산해 `target_coordinates`로 저장한다 (`rotation_angle` 기본 0, `scale` 기본 1.0).
+- 둘 다 생략하면 서버가 `blueprint.coordinates`를 그대로 `target_coordinates`로 저장한다 (변환 없음, 원본 경로로 채점).
+- 한쪽(`target_lat` 또는 `target_lng`)만 전달하면 `422 VALIDATION_ERROR`로 거부된다.
+- `target_coordinates`를 요청 바디로 직접 보내도 서버가 무시한다. 기준 경로는 반드시 서버가 계산·저장한다.
+
+채점(`POST /api/scores`)은 `ride.target_coordinates` ↔ `ride.actual_coordinates`만 비교한다. 런타임에 `blueprint.coordinates`로 fallback하지 않는다.
+
 ## 👥 팀원
 - 파트너: Play/Score 백엔드, Flutter scaffold
 - 준용: Auth/Profile/Create API, Score 기준 경로 계약, Flutter Play UI
