@@ -1,30 +1,28 @@
-# 🚴 RideQuest
+# 🎨 Earth Canvas
 
-자전거 라이더를 위한 위치 기반 퀘스트 & 수집 서비스
+GPS 경로를 캔버스 삼아 그림을 그리는 라이딩 채점 서비스
 
 ## 📌 프로젝트 소개
 
-특정 스팟에 도착하면 퀘스트가 해금되고, 완료한 퀘스트를 도감에서 수집하는 게이미피케이션 라이딩 앱입니다.
+도시 지도를 도화지처럼 쓴다. 사용자는 미리 디자인된 그림(블루프린트)을 따라 자전거로 주행하고, 서버는 실제 주행 경로와 블루프린트를 DTW(Dynamic Time Warping)로 비교해 점수를 매긴다.
 
 ### 핵심 기능
-- 🗺️ **위치 퀘스트**: 특정 장소 도착 시 퀘스트 해금
-- 📚 **도감**: 완료한 퀘스트 수집
-- 🏃 **활동 기록**: 거리, 시간, 속도, 경로 기록
-- ⏱️ **페이스메이커**: 목표 속도 설정 + 실시간 비교
-- 🏆 **티어/배지**: 달성 기반 등급 시스템
+- 🗂️ **블루프린트(Blueprint)**: GPS 좌표로 표현된 그림 원본. 업로드 · 조회 · 필터링
+- 🧭 **스텐실 플레이(Stencil Play)**: 블루프린트를 현재 위치 기준으로 변환해 주행 타겟을 제공
+- 🎯 **DTW 스코어링(Score)**: 주행 경로와 타겟 경로를 비교해 점수와 상세 매칭 결과 산출
+- 🏆 **랭킹**: 블루프린트별 · 유저별 스코어 랭킹
 
 ## 🛠️ 기술 스택
 
 ### Backend
 - FastAPI
-- PostgreSQL (개발: SQLite)
-- SQLAlchemy
+- PostgreSQL + SQLAlchemy + Alembic
 - JWT 인증
+- fastdtw + numpy (경로 스코어링)
 
 ### Frontend
-- React (Vite)
-- PWA
-- 카카오맵 API
+- Flutter
+- flutter_map + CyclOSM 타일 (지도 렌더링)
 
 ## 🚀 시작하기
 
@@ -35,36 +33,42 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
+alembic upgrade head
 uvicorn main:app --reload
 ```
 
 ### Frontend
 ```bash
 cd frontend
-npm install
-npm run dev
+flutter pub get
+flutter run
 ```
 
 ## 📁 프로젝트 구조
 ```
 first_shovel/
 ├── backend/
-│   ├── main.py           # FastAPI 앱
-│   ├── database.py       # DB 설정
-│   ├── models.py         # SQLAlchemy 모델
+│   ├── main.py              # FastAPI 엔트리포인트
+│   ├── app/
+│   │   ├── core/            # 설정, DB, 에러 핸들러
+│   │   ├── models/          # SQLAlchemy 모델 (User, Blueprint, Ride, Score)
+│   │   ├── routers/         # stencil, rides, scores
+│   │   └── services/        # 좌표 변환, DTW 스코어링
+│   ├── alembic/             # 마이그레이션
+│   ├── tests/
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
-│   ├── src/
-│   └── package.json
+│   ├── lib/                 # Flutter 소스
+│   └── pubspec.yaml
 └── README.md
 ```
 
 ## 👥 팀원
-- Person A: 인증, GPS 트래킹, 페이스메이커, 히스토리
-- Person B: 퀘스트, 도감, 티어/배지, 스팟 데이터
+- 파트너: Play/Score 백엔드, Flutter scaffold
+- 준용: Auth/Profile/Create API, Score 기준 경로 계약, Flutter Play UI
 
 ## 🗓️ 로드맵
-- [x] Phase 1: PWA (현재)
-- [ ] Phase 2: React Native 앱
-- [ ] Phase 3: Apple Watch 연동 → 러닝 확장
+- [ ] Phase 1 (MVP): Blueprint CRUD + Stencil Play + DTW Score + 랭킹 + Flutter Play UI
+- [ ] Phase 2: 소셜/공유 기능, 이벤트 블루프린트
+- [ ] Phase 3: PostGIS 전환 + 공간 쿼리 최적화
