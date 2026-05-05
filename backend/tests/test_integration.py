@@ -105,7 +105,7 @@ def _ride_body(blueprint_id: int, target_lat: float = 37.5000, target_lng: float
 
 
 def create_blueprint(client, user_id: int = 1) -> int:
-    """Directly insert a blueprint via the DB (partner API not yet available)."""
+    """Directly insert a blueprint via the DB for lower-level Play/Score tests."""
     db = TestingSession()
     from app.models.blueprint import Blueprint
     bp = Blueprint(
@@ -120,6 +120,75 @@ def create_blueprint(client, user_id: int = 1) -> int:
     bp_id = bp.id
     db.close()
     return bp_id
+
+
+def _blueprint_body(**overrides) -> dict:
+    body = {
+        "title": "Han River Fox",
+        "description": "A short fox-shaped route near the river",
+        "tags": ["animal", "river"],
+        "difficulty": 2,
+        "estimated_time": 35,
+        "distance": 3.2,
+        "coordinates": BLUEPRINT_COORDS,
+        "thumbnail_url": "https://example.com/fox.png",
+    }
+    body.update(overrides)
+    return body
+
+
+# ── Create API: blueprint list/detail/create ──────────────────────────────────
+
+def test_blueprint_create_requires_auth(unauth_client):
+    r = unauth_client.post("/api/blueprints", json=_blueprint_body())
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_blueprint_create_and_detail(client):
+    r = client.post("/api/blueprints", json=_blueprint_body())
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["id"] > 0
+    assert created["user_id"] == 1
+    assert created["user"]["nickname"] == "Tester"
+    assert created["title"] == "Han River Fox"
+    assert created["tags"] == ["animal", "river"]
+    assert created["coordinates"] == BLUEPRINT_COORDS
+
+    detail = client.get(f"/api/blueprints/{created['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json() == created
+
+
+def test_blueprints_list_filters_and_pages(client):
+    first = client.post("/api/blueprints", json=_blueprint_body(title="Fox", tags=["animal"], difficulty=2))
+    second = client.post(
+        "/api/blueprints",
+        json=_blueprint_body(title="Mountain", tags=["mountain"], difficulty=3),
+    )
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+
+    r = client.get("/api/blueprints", params={"tag": "animal", "difficulty": 2, "page": 1, "size": 1})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    assert body["page"] == 1
+    assert body["size"] == 1
+    assert [item["title"] for item in body["items"]] == ["Fox"]
+
+
+def test_blueprint_detail_404(client):
+    r = client.get("/api/blueprints/9999")
+    assert r.status_code == 404
+    assert r.json()["error_code"] == "NOT_FOUND"
+
+
+def test_blueprint_create_rejects_invalid_coordinates(client):
+    r = client.post("/api/blueprints", json=_blueprint_body(coordinates=[[37.5, 127.0]]))
+    assert r.status_code == 422
+    assert r.json()["error_code"] == "VALIDATION_ERROR"
 
 
 # ── Scenario 1: happy path ────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.exceptions import register_exception_handlers
 import app.models  # noqa: F401 — 모든 모델 등록 후 테이블 생성
-from app.routers import auth, stencil, rides, scores
+from app.routers import auth, blueprints, stencil, rides, scores
 
 Base.metadata.create_all(bind=engine)
 
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(blueprints.router)
 app.include_router(stencil.router)
 app.include_router(rides.router)
 app.include_router(scores.router)
