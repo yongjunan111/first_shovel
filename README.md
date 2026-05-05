@@ -79,6 +79,33 @@ first_shovel/
 
 채점(`POST /api/scores`)은 `ride.target_coordinates` ↔ `ride.actual_coordinates`만 비교한다. 런타임에 `blueprint.coordinates`로 fallback하지 않는다.
 
+### `GET /api/scores/ranking/{blueprint_id}` — 블루프린트별 랭킹
+
+**공개 엔드포인트.** 인증이 필요 없다. 리더보드는 비로그인 사용자에게도 노출되며, 응답에는 상위 100건의 `rank / user_id / ride_id / score / created_at`이 포함된다. 점수 생성/조회(`POST /api/scores`, `GET /api/scores/{ride_id}`)는 계속 인증이 필요하다(소유자만).
+
+### `POST /api/auth/dev-login` — 로컬 개발 전용 토큰 발급
+
+**로컬 개발 전용 엔드포인트다. 운영에서는 반드시 비활성 상태를 유지한다.**
+
+- `settings.ALLOW_DEV_LOGIN`의 기본값은 **False**(`backend/app/core/config.py`). 환경변수 미설정 시 자동으로 비활성화되어 401을 반환한다.
+- 로컬 개발에서는 `.env`에 `ALLOW_DEV_LOGIN=true`를 두어 opt-in한다 (`backend/.env.example` 참고).
+- 운영 배포 전 `.env`에서 해당 줄을 제거하거나 `false`로 돌려놓는다.
+- 테스트에서는 `monkeypatch.setattr(app.core.config.settings, "ALLOW_DEV_LOGIN", True)`로 명시적으로 열어서 사용한다.
+
+### `GET /api/auth/{provider}/authorize` · `/callback` — OAuth (scaffold-only)
+
+⚠️ **현재 OAuth 플로우는 scaffold 단계이며 운영 배포 금지.** 이유:
+
+- CSRF `state` 값을 `backend/app/routers/auth.py`의 **in-process set**(`_PENDING_STATES`)에 보관한다. 프로세스가 재시작되면 pending state가 전부 날아가고, 멀티워커(uvicorn --workers >1, gunicorn) 환경에서는 워커 간 공유가 안 되어 정상 사용자도 state mismatch로 401을 맞는다.
+- 즉, 현재 구현은 **단일 워커 로컬 개발 전용**이다. 운영 배포 전 state 저장소를 Redis/DB/서명된 쿠키 중 하나로 교체해야 한다.
+- `authorize`는 `state` 파라미터를 항상 포함하며, `callback`은 누락/불일치/재사용(single-use)된 state에 대해 Day 4 포맷(`{detail, error_code: "UNAUTHORIZED"}`)으로 401을 반환한다.
+- 프로바이더(`_exchange_and_fetch_google/kakao`)의 `httpx.TimeoutException`/`httpx.HTTPError`/`ValueError(JSON)`은 전부 `UnauthorizedError`로 변환되어 동일한 에러 envelope로 나간다.
+
+### JWT 시크릿 환경변수
+
+- 정식 이름은 `JWT_SECRET_KEY`. 레거시 `SECRET_KEY`도 alias로 읽는다(`JWT_SECRET_KEY` 우선, 미설정 시 `SECRET_KEY` 사용).
+- `ENV=production`에서 유효 시크릿이 placeholder(`change-me-in-production`)로 남아 있으면 설정 로딩 단계에서 `ValueError`로 기동이 실패한다. dev/test 환경은 placeholder 허용.
+
 ## 👥 팀원
 - 파트너: Play/Score 백엔드, Flutter scaffold
 - 준용: Auth/Profile/Create API, Score 기준 경로 계약, Flutter Play UI

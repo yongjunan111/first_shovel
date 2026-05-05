@@ -545,9 +545,10 @@ def test_dev_login_issues_usable_jwt(unauth_client, monkeypatch):
     assert r.json() == []   # Alice has no rides yet
 
 
-def test_dev_login_disabled_by_default_returns_401(unauth_client):
-    """With no settings override, ALLOW_DEV_LOGIN must default to False → 401."""
+def test_dev_login_disabled_returns_401(unauth_client, monkeypatch):
+    """Dev-login stays locked unless a test or local dev explicitly opts in."""
     from app.core import config
+    monkeypatch.setattr(config.settings, "ALLOW_DEV_LOGIN", False)
     assert config.settings.ALLOW_DEV_LOGIN is False, (
         "ALLOW_DEV_LOGIN default must be False so prod env-less config auto-disables dev-login"
     )
@@ -842,6 +843,17 @@ def test_production_env_refuses_default_jwt_secret(monkeypatch):
     monkeypatch.setenv("ENV", "production")
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    import pytest as _pytest
+    from app.core.config import Settings
+    with _pytest.raises(ValueError):
+        Settings(_env_file=None)
+
+
+def test_production_env_refuses_dev_login(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("JWT_SECRET_KEY", "production-secret-for-tests")
+    monkeypatch.setenv("ALLOW_DEV_LOGIN", "true")
 
     import pytest as _pytest
     from app.core.config import Settings

@@ -59,6 +59,11 @@ class Settings(BaseSettings):
                 "JWT_SECRET_KEY (or legacy SECRET_KEY) must be set in production — "
                 "refusing to run with the default placeholder secret."
             )
+        if self.ENV.lower() == "production" and self.ALLOW_DEV_LOGIN:
+            raise ValueError(
+                "ALLOW_DEV_LOGIN must be false in production — "
+                "dev-login issues JWTs without an OAuth provider."
+            )
         return self
 
 
