@@ -1,11 +1,16 @@
 """
-Integration tests: full Play → Score flow using TestClient + in-memory SQLite DB.
+Integration tests: full Play → Score flow using TestClient + file-backed SQLite DB.
+
+Auth contract: `get_current_user` is overridden via `app.dependency_overrides`
+to a test user, so the tests exercise ownership logic without needing a
+real JWT. Separate tests cover the 401 / bad-token paths directly.
 
 Scenarios:
   1. Happy path: blueprint → stencil transform → start ride → finish → score
   2. Transform + edited coordinates → ride → score
   3. Same blueprint, multiple rides → each gets its own score
   4. Error cases: 404s, double-finish, unfinished ride scoring
+  5. Auth: 401 when no token / bad token, cross-user ride/score isolation
 """
 import pytest
 from datetime import datetime, timezone
@@ -14,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base, get_db
+from app.core.deps import get_current_user
 from app.models.user import User
 from main import app
 
@@ -37,17 +43,35 @@ def override_get_db():
 def setup_db():
     Base.metadata.create_all(bind=engine)
     db = TestingSession()
-    # Seed dev user (id=1)
+    # Seed the primary test user (id=1). Ownership tests add a second user.
     if not db.query(User).filter(User.id == 1).first():
-        db.add(User(email="dev@earthcanvas.local", nickname="DevUser", provider="local"))
+        db.add(User(email="tester@earthcanvas.local", nickname="Tester", provider="local"))
         db.commit()
     db.close()
     yield
     Base.metadata.drop_all(bind=engine)
 
 
+def _primary_user() -> User:
+    db = TestingSession()
+    try:
+        return db.query(User).filter(User.id == 1).one()
+    finally:
+        db.close()
+
+
 @pytest.fixture
 def client(setup_db):
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = _primary_user
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def unauth_client(setup_db):
+    """Client with real get_current_user — used to exercise 401 paths."""
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as c:
         yield c
@@ -80,12 +104,12 @@ def _ride_body(blueprint_id: int, target_lat: float = 37.5000, target_lng: float
     }
 
 
-def create_blueprint(client) -> int:
+def create_blueprint(client, user_id: int = 1) -> int:
     """Directly insert a blueprint via the DB (partner API not yet available)."""
     db = TestingSession()
     from app.models.blueprint import Blueprint
     bp = Blueprint(
-        user_id=1,
+        user_id=user_id,
         title="Test Route",
         coordinates=BLUEPRINT_COORDS,
         distance=1.0,
@@ -408,3 +432,349 @@ def test_duplicate_score_returns_existing(client):
     assert r1.status_code == 201
     assert r2.status_code == 201
     assert r1.json()["id"] == r2.json()["id"]
+
+
+# ── Auth: 401 shape + bad-token shape use Day 4 error envelope ───────────────
+
+def test_rides_list_requires_auth(unauth_client):
+    r = unauth_client.get("/api/rides")
+    assert r.status_code == 401
+    body = r.json()
+    assert body["error_code"] == "UNAUTHORIZED"
+    assert "detail" in body
+
+
+def test_rides_list_rejects_bad_token(unauth_client):
+    r = unauth_client.get("/api/rides", headers={"Authorization": "Bearer not-a-real-token"})
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_scores_get_requires_auth(unauth_client):
+    r = unauth_client.get("/api/scores/1")
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+# ── Auth: valid-JWT round trip via dev-login ─────────────────────────────────
+
+def test_dev_login_issues_usable_jwt(unauth_client, monkeypatch):
+    # settings.ALLOW_DEV_LOGIN defaults to False (prod-safe). This test opts in.
+    from app.core import config
+    monkeypatch.setattr(config.settings, "ALLOW_DEV_LOGIN", True)
+
+    r = unauth_client.post("/api/auth/dev-login", json={"email": "alice@example.com", "nickname": "Alice"})
+    assert r.status_code == 200, r.json()
+    body = r.json()
+    assert body["token_type"] == "bearer"
+    token = body["access_token"]
+    assert token
+
+    # Token must unlock an authenticated endpoint.
+    r = unauth_client.get("/api/rides", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == []   # Alice has no rides yet
+
+
+def test_dev_login_disabled_by_default_returns_401(unauth_client):
+    """With no settings override, ALLOW_DEV_LOGIN must default to False → 401."""
+    from app.core import config
+    assert config.settings.ALLOW_DEV_LOGIN is False, (
+        "ALLOW_DEV_LOGIN default must be False so prod env-less config auto-disables dev-login"
+    )
+    r = unauth_client.post(
+        "/api/auth/dev-login",
+        json={"email": "nope@example.com", "nickname": "Nope"},
+    )
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+# ── Auth: cross-user ride/score isolation ────────────────────────────────────
+
+def test_cross_user_ride_access_is_404(unauth_client):
+    """User A creates a ride. User B gets 404 (not 200, not 403) on read/finish/score."""
+    # Seed user B
+    db = TestingSession()
+    try:
+        if not db.query(User).filter(User.id == 2).first():
+            db.add(User(id=2, email="b@earthcanvas.local", nickname="UserB", provider="local"))
+            db.commit()
+    finally:
+        db.close()
+
+    # A starts + finishes a ride
+    def user_a():
+        return _primary_user()
+
+    def user_b():
+        db = TestingSession()
+        try:
+            return db.query(User).filter(User.id == 2).one()
+        finally:
+            db.close()
+
+    bp_id = create_blueprint(unauth_client)
+
+    app.dependency_overrides[get_current_user] = user_a
+    r = unauth_client.post("/api/rides", json=_ride_body(bp_id))
+    assert r.status_code == 201
+    ride_id = r.json()["id"]
+    r = unauth_client.put(f"/api/rides/{ride_id}/finish", json={
+        "actual_coordinates": BLUEPRINT_COORDS,
+        "finished_at": LATER,
+        "distance": 1.0,
+        "duration": 3600,
+    })
+    assert r.status_code == 200
+
+    # B cannot see A's ride
+    app.dependency_overrides[get_current_user] = user_b
+    r = unauth_client.get(f"/api/rides/{ride_id}")
+    assert r.status_code == 404
+    # B cannot finish A's ride (already finished, but ownership beats state)
+    r = unauth_client.put(f"/api/rides/{ride_id}/finish", json={
+        "actual_coordinates": BLUEPRINT_COORDS,
+        "finished_at": LATER,
+        "distance": 1.0,
+        "duration": 3600,
+    })
+    assert r.status_code == 404
+    # B cannot score A's ride
+    r = unauth_client.post("/api/scores", json={"ride_id": ride_id})
+    assert r.status_code == 404
+    # B's own ride list is empty
+    r = unauth_client.get("/api/rides")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+# ── Auth: OAuth token exchange is mockable ───────────────────────────────────
+
+def _get_state_from_authorize(unauth_client, provider: str) -> str:
+    """Drive /authorize to obtain a valid single-use state for /callback tests."""
+    from urllib.parse import parse_qs, urlparse
+
+    r = unauth_client.get(f"/api/auth/{provider}/authorize")
+    assert r.status_code == 200, r.json()
+    url = r.json()["authorization_url"]
+    qs = parse_qs(urlparse(url).query)
+    assert "state" in qs and qs["state"][0], f"authorize must include non-empty state: {url}"
+    return qs["state"][0]
+
+
+def test_google_oauth_callback_mints_jwt_when_provider_fetch_mocked(unauth_client, monkeypatch):
+    """Patch _exchange_and_fetch_google so no real HTTP call is made.
+
+    Confirms the callback wiring: code + state → (mocked) profile → upsert user → JWT.
+    """
+    from app.routers import auth as auth_router
+
+    def fake_fetch(code: str):
+        assert code == "fake-code"
+        return {"email": "newbie@gmail.com", "nickname": "Newbie"}
+
+    monkeypatch.setattr(auth_router, "_exchange_and_fetch_google", fake_fetch)
+
+    state = _get_state_from_authorize(unauth_client, "google")
+    r = unauth_client.get("/api/auth/google/callback", params={"code": "fake-code", "state": state})
+    assert r.status_code == 200, r.json()
+    body = r.json()
+    assert body["token_type"] == "bearer"
+    assert body["access_token"]
+
+    # Use the token to hit an authenticated endpoint.
+    r = unauth_client.get("/api/rides", headers={"Authorization": f"Bearer {body['access_token']}"})
+    assert r.status_code == 200
+
+
+def test_google_authorize_url_contains_expected_params(unauth_client, monkeypatch):
+    # Provide a stable client_id so the generated URL is deterministic.
+    from app.core import config
+    monkeypatch.setattr(config.settings, "GOOGLE_CLIENT_ID", "test-client-id")
+    r = unauth_client.get("/api/auth/google/authorize")
+    assert r.status_code == 200
+    url = r.json()["authorization_url"]
+    assert "accounts.google.com" in url
+    assert "client_id=test-client-id" in url
+    assert "response_type=code" in url
+    # CSRF state must be present and non-empty (scaffold-only in-process store).
+    assert "state=" in url
+    from urllib.parse import parse_qs, urlparse
+    qs = parse_qs(urlparse(url).query)
+    assert qs["state"][0], "state must be non-empty"
+
+
+def test_kakao_oauth_callback_mints_jwt_when_provider_fetch_mocked(unauth_client, monkeypatch):
+    from app.routers import auth as auth_router
+
+    def fake_fetch(code: str):
+        return {"email": "k@kakao.com", "nickname": "Kakao"}
+
+    monkeypatch.setattr(auth_router, "_exchange_and_fetch_kakao", fake_fetch)
+
+    state = _get_state_from_authorize(unauth_client, "kakao")
+    r = unauth_client.get("/api/auth/kakao/callback", params={"code": "whatever", "state": state})
+    assert r.status_code == 200
+    assert r.json()["access_token"]
+
+
+# ── OAuth state (scaffold-only) — missing / mismatched / replay ─────────────
+
+def test_callback_without_state_returns_401(unauth_client, monkeypatch):
+    """Callback without `state` must 401 via the Day 4 error envelope.
+
+    Ensures CSRF state is actually consumed — provider fetch must not even run.
+    """
+    from app.routers import auth as auth_router
+
+    def must_not_be_called(code: str):
+        raise AssertionError("provider fetch must not run when state is missing")
+
+    monkeypatch.setattr(auth_router, "_exchange_and_fetch_google", must_not_be_called)
+
+    r = unauth_client.get("/api/auth/google/callback", params={"code": "fake-code"})
+    assert r.status_code == 401
+    body = r.json()
+    assert body["error_code"] == "UNAUTHORIZED"
+    assert "state" in body["detail"].lower()
+
+
+def test_callback_with_mismatched_state_returns_401(unauth_client, monkeypatch):
+    from app.routers import auth as auth_router
+
+    def must_not_be_called(code: str):
+        raise AssertionError("provider fetch must not run on bad state")
+
+    monkeypatch.setattr(auth_router, "_exchange_and_fetch_google", must_not_be_called)
+
+    r = unauth_client.get(
+        "/api/auth/google/callback",
+        params={"code": "fake-code", "state": "never-issued-this"},
+    )
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_callback_state_is_single_use(unauth_client, monkeypatch):
+    """Replaying the same state after a successful callback must fail."""
+    from app.routers import auth as auth_router
+
+    monkeypatch.setattr(
+        auth_router, "_exchange_and_fetch_google",
+        lambda code: {"email": "reuse@gmail.com", "nickname": "Reuse"},
+    )
+
+    state = _get_state_from_authorize(unauth_client, "google")
+    r = unauth_client.get("/api/auth/google/callback", params={"code": "c", "state": state})
+    assert r.status_code == 200
+
+    # Replay — same state must be rejected.
+    r = unauth_client.get("/api/auth/google/callback", params={"code": "c", "state": state})
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+# ── OAuth provider network/JSON errors → Day 4 error envelope ────────────────
+
+def test_callback_provider_timeout_returns_401_envelope(unauth_client, monkeypatch):
+    """If the provider fetch raises httpx.TimeoutException, convert to UnauthorizedError."""
+    import httpx
+    from app.routers import auth as auth_router
+
+    def boom(code: str):
+        # Route through the real error converter path by raising from inside the helper.
+        # The helper itself swallows httpx.* and raises UnauthorizedError; emulate that.
+        raise auth_router._convert_provider_error("google", httpx.TimeoutException("simulated"))
+
+    monkeypatch.setattr(auth_router, "_exchange_and_fetch_google", boom)
+
+    state = _get_state_from_authorize(unauth_client, "google")
+    r = unauth_client.get("/api/auth/google/callback", params={"code": "c", "state": state})
+    assert r.status_code == 401
+    body = r.json()
+    assert body["error_code"] == "UNAUTHORIZED"
+    assert "detail" in body
+
+
+def test_provider_helper_converts_timeout_httperror_and_json_errors():
+    """Direct unit-level check: _exchange_and_fetch_google wraps httpx/JSON errors."""
+    import httpx
+    from app.routers import auth as auth_router
+    from app.core.exceptions import UnauthorizedError
+
+    class _BoomClient:
+        def __init__(self, exc):
+            self._exc = exc
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def post(self, *a, **kw):
+            raise self._exc
+        def get(self, *a, **kw):
+            raise self._exc
+
+    for exc in (httpx.TimeoutException("t"), httpx.HTTPError("net"), ValueError("json")):
+        def _client_factory(exc=exc, *a, **kw):
+            return _BoomClient(exc)
+
+        import pytest as _pytest
+        with monkeypatched_httpx(_client_factory):
+            with _pytest.raises(UnauthorizedError):
+                auth_router._exchange_and_fetch_google("any-code")
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def monkeypatched_httpx(factory):
+    """Swap httpx.Client inside auth_router for a boom-factory during the block."""
+    from app.routers import auth as auth_router
+    original = auth_router.httpx.Client
+    auth_router.httpx.Client = factory
+    try:
+        yield
+    finally:
+        auth_router.httpx.Client = original
+
+
+# ── Ranking is intentionally public (no auth) ────────────────────────────────
+
+def test_ranking_is_public_no_auth(unauth_client):
+    """/api/scores/ranking/{blueprint_id} must NOT require a JWT — public leaderboard."""
+    bp_id = create_blueprint(unauth_client)
+    r = unauth_client.get(f"/api/scores/ranking/{bp_id}")
+    assert r.status_code == 200, r.json()
+    assert isinstance(r.json(), list)
+
+
+# ── JWT secret backward-compat (SECRET_KEY alias) ────────────────────────────
+
+def test_secret_key_alias_promoted_to_jwt_secret_key(monkeypatch):
+    """Legacy SECRET_KEY env must promote to JWT_SECRET_KEY when the latter is unset.
+
+    Guards against silent fallback to the insecure 'change-me-in-production' default
+    for deployments that already rely on the older env name.
+    """
+    # Keep the real .env from leaking in.
+    monkeypatch.setenv("SECRET_KEY", "legacy-secret-xyz")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    # Force development so the production guard doesn't trip in a different path.
+    monkeypatch.setenv("ENV", "development")
+
+    from app.core.config import Settings
+    s = Settings(_env_file=None)  # don't read .env — rely on our patched env vars
+    assert s.JWT_SECRET_KEY == "legacy-secret-xyz"
+
+
+def test_production_env_refuses_default_jwt_secret(monkeypatch):
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+
+    import pytest as _pytest
+    from app.core.config import Settings
+    with _pytest.raises(ValueError):
+        Settings(_env_file=None)

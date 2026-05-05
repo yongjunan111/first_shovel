@@ -3,10 +3,12 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.database import get_db
+from app.core.deps import get_current_user
 from app.core.exceptions import NotFoundError, BadRequestError
 from app.models.score import Score
 from app.models.ride import Ride
 from app.models.blueprint import Blueprint
+from app.models.user import User
 from app.schemas.score import ScoreRequest, ScoreResponse, RankingEntry
 from app.services.scoring import compute_score
 
@@ -14,9 +16,16 @@ router = APIRouter(prefix="/api/scores", tags=["scores"])
 
 
 @router.post("", response_model=ScoreResponse, status_code=201)
-def create_score(body: ScoreRequest, db: Session = Depends(get_db)):
+def create_score(
+    body: ScoreRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     ride = db.query(Ride).filter(Ride.id == body.ride_id).first()
     if not ride:
+        raise NotFoundError(f"Ride {body.ride_id} not found")
+    # Ownership: a ride can only be scored by its owner — cross-user hidden as 404.
+    if ride.user_id != current_user.id:
         raise NotFoundError(f"Ride {body.ride_id} not found")
     if not ride.finished_at:
         raise BadRequestError("Ride not finished yet")
@@ -47,7 +56,12 @@ def create_score(body: ScoreRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/ranking/{blueprint_id}", response_model=List[RankingEntry])
-def get_ranking(blueprint_id: int, db: Session = Depends(get_db)):
+def get_ranking(
+    blueprint_id: int,
+    db: Session = Depends(get_db),
+):
+    # Ranking is intentionally public — no get_current_user dependency. See README.
+
     if not db.query(Blueprint).filter(Blueprint.id == blueprint_id).first():
         raise NotFoundError(f"Blueprint {blueprint_id} not found")
 
@@ -71,8 +85,15 @@ def get_ranking(blueprint_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{ride_id}", response_model=ScoreResponse)
-def get_score(ride_id: int, db: Session = Depends(get_db)):
+def get_score(
+    ride_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     score = db.query(Score).filter(Score.ride_id == ride_id).first()
     if not score:
+        raise NotFoundError(f"Score for ride {ride_id} not found")
+    # Ownership check: a user may only view their own score.
+    if score.user_id != current_user.id:
         raise NotFoundError(f"Score for ride {ride_id} not found")
     return score

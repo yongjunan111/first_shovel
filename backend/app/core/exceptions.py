@@ -40,6 +40,11 @@ class BadRequestError(EarthCanvasError):
     error_code = "BAD_REQUEST"
 
 
+class UnauthorizedError(EarthCanvasError):
+    status_code = 401
+    error_code = "UNAUTHORIZED"
+
+
 # ── Handlers ─────────────────────────────────────────────────────────────────
 
 def _error_body(detail: str, error_code: str) -> dict:
