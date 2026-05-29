@@ -17,6 +17,7 @@ final locationProvider = StreamProvider<Position>((ref) async* {
     distanceFilter: 5, // emit every 5 m of movement
   );
 
-  yield await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+  yield await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high);
   yield* Geolocator.getPositionStream(locationSettings: settings);
 });
