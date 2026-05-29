@@ -191,6 +191,46 @@ def test_blueprint_create_rejects_invalid_coordinates(client):
     assert r.json()["error_code"] == "VALIDATION_ERROR"
 
 
+# ── Profile API: current user lookup + update ────────────────────────────────
+
+def test_profile_requires_auth(unauth_client):
+    r = unauth_client.get("/api/me")
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "UNAUTHORIZED"
+
+
+def test_profile_get_returns_current_user(client):
+    r = client.get("/api/me")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["id"] == 1
+    assert body["email"] == "tester@earthcanvas.local"
+    assert body["nickname"] == "Tester"
+    assert body["profile_image"] is None
+    assert body["provider"] == "local"
+
+
+def test_profile_update_nickname_and_image(client):
+    r = client.patch("/api/me", json={
+        "nickname": "CanvasPilot",
+        "profile_image": "https://example.com/profile.png",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["nickname"] == "CanvasPilot"
+    assert body["profile_image"] == "https://example.com/profile.png"
+
+    r = client.get("/api/me")
+    assert r.status_code == 200
+    assert r.json()["nickname"] == "CanvasPilot"
+
+
+def test_profile_update_rejects_null_nickname(client):
+    r = client.patch("/api/me", json={"nickname": None})
+    assert r.status_code == 422
+    assert r.json()["error_code"] == "VALIDATION_ERROR"
+
+
 # ── Scenario 1: happy path ────────────────────────────────────────────────────
 
 def test_happy_path_full_flow(client):
